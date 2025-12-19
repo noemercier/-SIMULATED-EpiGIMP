@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Checkerboard grid to visualize transparency */
+.transparency-grid {
+  /* Darker grey checkerboard to visualize transparency */
+  background-color: #c9c9c9; /* base */
+  background-image:
+    linear-gradient(45deg, #9c9c9c 25%, transparent 25%),
+    linear-gradient(-45deg, #9c9c9c 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #9c9c9c 75%),
+    linear-gradient(-45deg, transparent 75%, #9c9c9c 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+}
+
+/* Grey slider styling for brush size & hardness */
+input.range-gray[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  background: transparent;
+}
+
+/* WebKit track */
+input.range-gray[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  background-color: #7a7a7a; /* grey track */
+  border-radius: 9999px;
+}
+
+/* WebKit thumb */
+input.range-gray[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background-color: #e5e5e5; /* light thumb */
+  border: 1px solid #666;
+  margin-top: -4px; /* center the thumb over a 6px track */
+}
+
+/* Firefox track */
+input.range-gray[type="range"]::-moz-range-track {
+  height: 6px;
+  background-color: #7a7a7a;
+  border-radius: 9999px;
+}
+
+/* Firefox thumb */
+input.range-gray[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background-color: #e5e5e5;
+  border: 1px solid #666;
+}
+
+/* Dark mode tweak */
+@media (prefers-color-scheme: dark) {
+  input.range-gray[type="range"]::-webkit-slider-runnable-track,
+  input.range-gray[type="range"]::-moz-range-track {
+    background-color: #4a4a4a;
+  }
+  input.range-gray[type="range"]::-webkit-slider-thumb,
+  input.range-gray[type="range"]::-moz-range-thumb {
+    background-color: #d1d5db; /* slightly darker in dark mode */
+    border-color: #555;
+  }
+}

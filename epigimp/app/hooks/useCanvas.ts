@@ -19,6 +19,8 @@ export function useCanvas(
 	tool: "brush" | "eraser" | "move" | "select" | "lasso" | "transform" | "eyedropper" = "brush",
 ) {
 	const displayCanvasRef = useRef<HTMLCanvasElement | null>(null)
+	// Document-level canvas size (optional override). If null, size derives from layers.
+	const [docSize, setDocSize] = useState<{ width: number; height: number } | null>(null)
 	const [brush, setBrush] = useState<BrushSettings>({ size: 12, color: "#000000", hardness: 1 })
 	const [isDrawing, setIsDrawing] = useState(false)
 	const lastPoint = useRef<{ x: number; y: number } | null>(null)
@@ -54,16 +56,18 @@ export function useCanvas(
 			start: { x: number; y: number } | null
 			rect: { x: number; y: number; w: number; h: number } | null
 			path: { x: number; y: number }[]
+			invert: boolean
 			active: boolean
 		}
-		const selection = useRef<SelectionState>({ mode: "none", start: null, rect: null, path: [], active: false })
+		const selection = useRef<SelectionState>({ mode: "none", start: null, rect: null, path: [], invert: false, active: false })
 
 	const size = useMemo(() => {
-		// Use the largest layer size present or default
+		if (docSize) return { width: docSize.width, height: docSize.height }
+		// Use the largest layer size present or default when no override
 		const w = Math.max(...layers.map((l) => l.width), 1)
 		const h = Math.max(...layers.map((l) => l.height), 1)
 		return { width: w || 1024, height: h || 768 }
-	}, [layers])
+	}, [layers, docSize])
 
 	const composite = useCallback(() => {
 		const canvas = displayCanvasRef.current
@@ -80,7 +84,82 @@ export function useCanvas(
 					// Draw active layer with preview scaling when transforming
 					if (tool === "transform" && activeLayer && layer.id === activeLayer.id && transform.current.active && transform.current.previewRect) {
 						const r = transform.current.previewRect
-						ctx.drawImage(layer.canvas, r.x, r.y, r.w, r.h)
+						// If there's a non-inverted selection, preview transforming only that region
+						const hasRectSel = selection.current.mode === "rect" && selection.current.rect && !selection.current.invert
+						const hasLassoSel = selection.current.mode === "lasso" && selection.current.path.length > 2 && !selection.current.invert
+						if (hasRectSel || hasLassoSel) {
+							const ox = layer.x || 0
+							const oy = layer.y || 0
+							let sx = 0, sy = 0, sw = 0, sh = 0
+							if (hasRectSel && selection.current.rect) {
+								const rect = selection.current.rect
+								sx = Math.max(0, Math.floor(rect.x - ox))
+								sy = Math.max(0, Math.floor(rect.y - oy))
+								sw = Math.max(0, Math.min(layer.width - sx, Math.floor(rect.w)))
+								sh = Math.max(0, Math.min(layer.height - sy, Math.floor(rect.h)))
+							}
+							if (hasLassoSel && selection.current.path.length > 2) {
+								// Lasso bbox in layer-local
+								const pts = selection.current.path
+								let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
+								for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
+								sx = Math.max(0, Math.floor(minX - ox))
+								sy = Math.max(0, Math.floor(minY - oy))
+								sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
+								sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
+							}
+							// Draw the layer minus selection area first
+							const off = document.createElement("canvas")
+							off.width = layer.width
+							off.height = layer.height
+							const octx = off.getContext("2d")!
+							octx.drawImage(layer.canvas, 0, 0)
+							if (sw > 0 && sh > 0) {
+								if (hasRectSel) {
+									// Erase rect area
+									octx.clearRect(sx, sy, sw, sh)
+								} else {
+									// Erase lasso polygon
+									const pts = selection.current.path
+									octx.save()
+									octx.beginPath()
+									octx.moveTo(pts[0].x - ox, pts[0].y - oy)
+									for (let i = 1; i < pts.length; i++) octx.lineTo(pts[i].x - ox, pts[i].y - oy)
+									octx.closePath()
+									octx.globalCompositeOperation = "destination-out"
+									octx.fill()
+									octx.restore()
+								}
+							}
+							// Draw result
+							ctx.drawImage(off, ox, oy)
+							// Now draw the scaled selection content on top
+							if (sw > 0 && sh > 0) {
+								if (hasRectSel) {
+									ctx.drawImage(layer.canvas, sx, sy, sw, sh, r.x, r.y, r.w, r.h)
+								} else {
+									// Clip to scaled lasso polygon
+									const pts = selection.current.path
+									ctx.save()
+									ctx.beginPath()
+									for (let i = 0; i < pts.length; i++) {
+										const px = pts[i].x
+										const py = pts[i].y
+										// Map from original bbox (sx,sy,sw,sh) to preview rect r
+										const tx = r.x + ((px - (ox + sx)) * r.w) / sw
+										const ty = r.y + ((py - (oy + sy)) * r.h) / sh
+										if (i === 0) ctx.moveTo(tx, ty); else ctx.lineTo(tx, ty)
+									}
+									ctx.closePath()
+									ctx.clip()
+									ctx.drawImage(layer.canvas, sx, sy, sw, sh, r.x, r.y, r.w, r.h)
+									ctx.restore()
+								}
+							}
+						} else {
+							// Fallback: whole-layer preview scaling
+							ctx.drawImage(layer.canvas, r.x, r.y, r.w, r.h)
+						}
 					} else {
 						ctx.drawImage(layer.canvas, layer.x || 0, layer.y || 0)
 					}
@@ -125,7 +204,18 @@ export function useCanvas(
 
 			// Transform overlay: bounding box + corner handles
 			if (tool === "transform" && activeLayer) {
-				const rect = transform.current.previewRect ?? { x: activeLayer.x || 0, y: activeLayer.y || 0, w: activeLayer.width, h: activeLayer.height }
+					let baseRect = { x: activeLayer.x || 0, y: activeLayer.y || 0, w: activeLayer.width, h: activeLayer.height }
+					if (!selection.current.invert) {
+						if (selection.current.mode === "rect" && selection.current.rect) {
+							baseRect = { x: selection.current.rect.x, y: selection.current.rect.y, w: selection.current.rect.w, h: selection.current.rect.h }
+						} else if (selection.current.mode === "lasso" && selection.current.path.length > 1) {
+							const pts = selection.current.path
+							let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
+							for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
+							baseRect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+						}
+					}
+					const rect = transform.current.previewRect ?? baseRect
 				ctx.save()
 				ctx.strokeStyle = "#10b981"
 				ctx.setLineDash([6, 4])
@@ -164,28 +254,115 @@ export function useCanvas(
 		composite()
 	}, [composite])
 
+	// Canvas (document) resize helpers
+	const resizeCanvas = useCallback((newW: number, newH: number) => {
+		const w = Math.max(1, Math.floor(newW))
+		const h = Math.max(1, Math.floor(newH))
+		setDocSize({ width: w, height: h })
+		addHistory(`Resize Canvas to ${w}×${h}`)
+		// Re-composite with new size
+		composite()
+	}, [composite, addHistory])
+
+	const fitCanvasToLayers = useCallback(() => {
+		// Clear override so size derives from current layers
+		setDocSize(null)
+		addHistory("Fit Canvas to Layers")
+		composite()
+	}, [composite, addHistory])
+
 	// Commit transform when switching away if a preview exists; otherwise clear overlay
 	useEffect(() => {
 		if (tool !== "transform") {
 			if (transform.current.active && transform.current.previewRect && activeLayer) {
-				// Commit interactive resize
-				pushLayerSnapshot(activeLayer)
 				const r = transform.current.previewRect
-				const out = document.createElement("canvas")
-				out.width = r.w
-				out.height = r.h
-				const ctx = out.getContext("2d")
-				if (ctx) {
-					ctx.drawImage(activeLayer.canvas, 0, 0, activeLayer.width, activeLayer.height, 0, 0, r.w, r.h)
-					activeLayer.canvas = out
-					activeLayer.ctx = ctx
-					activeLayer.width = r.w
-					activeLayer.height = r.h
-					activeLayer.x = r.x
-					activeLayer.y = r.y
-					// Clear redo on new action
-					redoStacksRef.current.set(activeLayer.id, [])
-					addHistory("Resize (interactive)")
+				const hasSel = !selection.current.invert && ((selection.current.mode === "rect" && selection.current.rect) || (selection.current.mode === "lasso" && selection.current.path.length > 2))
+				if (hasSel) {
+					// Commit selection-only transform onto the active layer (keep layer size)
+					pushLayerSnapshot(activeLayer)
+					const layer = activeLayer
+					const ox = layer.x || 0
+					const oy = layer.y || 0
+					let sx = 0, sy = 0, sw = 0, sh = 0
+					if (selection.current.mode === "rect" && selection.current.rect) {
+						const rect = selection.current.rect
+						sx = Math.max(0, Math.floor(rect.x - ox))
+						sy = Math.max(0, Math.floor(rect.y - oy))
+						sw = Math.max(0, Math.min(layer.width - sx, Math.floor(rect.w)))
+						sh = Math.max(0, Math.min(layer.height - sy, Math.floor(rect.h)))
+					} else if (selection.current.mode === "lasso" && selection.current.path.length > 2) {
+						const pts = selection.current.path
+						let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
+						for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
+						sx = Math.max(0, Math.floor(minX - ox))
+						sy = Math.max(0, Math.floor(minY - oy))
+						sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
+						sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
+					}
+					const out = document.createElement("canvas")
+					out.width = layer.width
+					out.height = layer.height
+					const lctx = out.getContext("2d")!
+					// Start with original
+					lctx.drawImage(layer.canvas, 0, 0)
+					// Erase original selection area
+					if (sw > 0 && sh > 0) {
+						if (selection.current.mode === "rect") {
+							lctx.clearRect(sx, sy, sw, sh)
+						} else {
+							const pts = selection.current.path
+							lctx.save()
+							lctx.beginPath()
+							lctx.moveTo(pts[0].x - ox, pts[0].y - oy)
+							for (let i = 1; i < pts.length; i++) lctx.lineTo(pts[i].x - ox, pts[i].y - oy)
+							lctx.closePath()
+							lctx.globalCompositeOperation = "destination-out"
+							lctx.fill()
+							lctx.restore()
+						}
+						// Draw scaled selection content into new position relative to layer
+						lctx.save()
+						if (selection.current.mode === "lasso") {
+							// Clip to scaled lasso
+							const pts = selection.current.path
+							lctx.beginPath()
+							for (let i = 0; i < pts.length; i++) {
+								const px = pts[i].x
+								const py = pts[i].y
+								const tx = (r.x - ox) + ((px - (ox + sx)) * r.w) / sw
+								const ty = (r.y - oy) + ((py - (oy + sy)) * r.h) / sh
+								if (i === 0) lctx.moveTo(tx, ty); else lctx.lineTo(tx, ty)
+							}
+							lctx.closePath()
+							lctx.clip()
+						}
+						lctx.imageSmoothingEnabled = true
+						lctx.drawImage(layer.canvas, sx, sy, sw, sh, r.x - ox, r.y - oy, r.w, r.h)
+						lctx.restore()
+					}
+					layer.canvas = out
+					layer.ctx = lctx
+					// Size unchanged; position unchanged
+					redoStacksRef.current.set(layer.id, [])
+					addHistory("Transform selection")
+				} else {
+					// Commit whole-layer resize as before
+					pushLayerSnapshot(activeLayer)
+					const out = document.createElement("canvas")
+					out.width = r.w
+					out.height = r.h
+					const ctx = out.getContext("2d")
+					if (ctx) {
+						ctx.drawImage(activeLayer.canvas, 0, 0, activeLayer.width, activeLayer.height, 0, 0, r.w, r.h)
+						activeLayer.canvas = out
+						activeLayer.ctx = ctx
+						activeLayer.width = r.w
+						activeLayer.height = r.h
+						activeLayer.x = r.x
+						activeLayer.y = r.y
+						redoStacksRef.current.set(activeLayer.id, [])
+						addHistory("Resize (interactive)")
+					}
 				}
 			}
 			transform.current.active = false
@@ -197,13 +374,101 @@ export function useCanvas(
 		const drawLineOnActive = useCallback(
 			(from: { x: number; y: number }, to: { x: number; y: number }) => {
 				if (!activeLayer) return
-				// Convert global canvas coords to layer-local coords
+				// Ensure the active layer can accept strokes anywhere on the visible canvas
+				// by auto-expanding the layer canvas if the stroke would go outside its bounds.
+				{
+					const layerLeft = (activeLayer.x || 0)
+					const layerTop = (activeLayer.y || 0)
+					const layerRight = layerLeft + activeLayer.width
+					const layerBottom = layerTop + activeLayer.height
+					const half = Math.max(1, Math.floor(brush.size / 2))
+					const minX = Math.min(from.x, to.x) - half
+					const maxX = Math.max(from.x, to.x) + half
+					const minY = Math.min(from.y, to.y) - half
+					const maxY = Math.max(from.y, to.y) + half
+					const expandLeft = Math.max(0, Math.floor(layerLeft - minX))
+					const expandTop = Math.max(0, Math.floor(layerTop - minY))
+					const expandRight = Math.max(0, Math.floor(maxX - layerRight))
+					const expandBottom = Math.max(0, Math.floor(maxY - layerBottom))
+					if (expandLeft > 0 || expandTop > 0 || expandRight > 0 || expandBottom > 0) {
+						// Snapshot full layer to allow undo to restore size/position
+						pushLayerSnapshot(activeLayer)
+						const out = document.createElement("canvas")
+						out.width = activeLayer.width + expandLeft + expandRight
+						out.height = activeLayer.height + expandTop + expandBottom
+						const nctx = out.getContext("2d")
+						if (nctx) {
+							// Draw old layer into the new canvas with offset
+							nctx.drawImage(activeLayer.canvas, expandLeft, expandTop)
+							activeLayer.canvas = out
+							activeLayer.ctx = nctx
+							activeLayer.width = out.width
+							activeLayer.height = out.height
+							activeLayer.x = layerLeft - expandLeft
+							activeLayer.y = layerTop - expandTop
+						}
+					}
+				}
+				// Convert global canvas coords to layer-local coords (after possible expansion)
 				const ox = activeLayer.x || 0
 				const oy = activeLayer.y || 0
 				const lFrom = { x: from.x - ox, y: from.y - oy }
 				const lTo = { x: to.x - ox, y: to.y - oy }
 				const ctx = activeLayer.ctx
 				ctx.save()
+					// If a selection is active, clip drawing to the selected region
+					if (selection.current.mode === "rect" && selection.current.rect) {
+						const rect = selection.current.rect
+						const rx = Math.max(0, Math.floor(rect.x - (activeLayer.x || 0)))
+						const ry = Math.max(0, Math.floor(rect.y - (activeLayer.y || 0)))
+						const rw = Math.max(0, Math.min(activeLayer.width - rx, Math.floor(rect.w)))
+						const rh = Math.max(0, Math.min(activeLayer.height - ry, Math.floor(rect.h)))
+						const inverted = selection.current.invert
+						// If non-inverted selection has zero intersection, skip drawing entirely
+						if (!inverted && (rw <= 0 || rh <= 0)) {
+							ctx.restore()
+							return
+						}
+						// If inverted and no intersection, selection is effectively the whole layer -> no clip
+						if (rw > 0 && rh > 0) {
+							ctx.beginPath()
+							if (!inverted) {
+								ctx.rect(rx, ry, rw, rh)
+								ctx.clip()
+							} else {
+								// Invert: clip outside the rect via even-odd rule
+								ctx.rect(0, 0, activeLayer.width, activeLayer.height)
+								ctx.rect(rx, ry, rw, rh)
+								// Use even-odd to keep outside area
+								;(ctx as any).clip("evenodd")
+							}
+						}
+					} else if (selection.current.mode === "lasso" && selection.current.path.length > 2) {
+						// Build polygon path in layer-local coordinates
+						const pts = selection.current.path
+						const polyLocal = pts.map((p) => ({ x: p.x - (activeLayer.x || 0), y: p.y - (activeLayer.y || 0) }))
+						// Compute bbox intersection with layer
+						let minX = polyLocal[0].x, minY = polyLocal[0].y, maxX = polyLocal[0].x, maxY = polyLocal[0].y
+						for (let i = 1; i < polyLocal.length; i++) { const p = polyLocal[i]; if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
+						const inverted = selection.current.invert
+						const intersects = !(maxX < 0 || maxY < 0 || minX > activeLayer.width || minY > activeLayer.height)
+						if (!inverted && !intersects) {
+							// Non-inverted selection outside layer: skip drawing
+							ctx.restore()
+							return
+						}
+						ctx.beginPath()
+						ctx.moveTo(polyLocal[0].x, polyLocal[0].y)
+						for (let i = 1; i < polyLocal.length; i++) ctx.lineTo(polyLocal[i].x, polyLocal[i].y)
+						ctx.closePath()
+						if (!inverted) {
+							ctx.clip()
+						} else if (intersects) {
+							// Invert: clip outside polygon via even-odd by combining with full rect
+							ctx.rect(0, 0, activeLayer.width, activeLayer.height)
+							;(ctx as any).clip("evenodd")
+						}
+					}
 					ctx.globalAlpha = brush.hardness
 					if (tool === "eraser") {
 						ctx.globalCompositeOperation = "destination-out"
@@ -247,14 +512,26 @@ export function useCanvas(
 					selection.current.rect = { x: pos.x, y: pos.y, w: 0, h: 0 }
 					selection.current.path = []
 					selection.current.mode = "rect"
+					selection.current.invert = false
 					selection.current.active = true
 					setIsDrawing(true)
 					composite()
 					return
 				}
-				// Transform tool begins when grabbing a corner handle
+				// Transform tool begins when grabbing a corner/edge handle
 				if (tool === "transform") {
-					const rect = { x: activeLayer.x || 0, y: activeLayer.y || 0, w: activeLayer.width, h: activeLayer.height }
+					// Use selection bounds (non-inverted) if available, otherwise the whole layer rect
+					let rect = { x: activeLayer.x || 0, y: activeLayer.y || 0, w: activeLayer.width, h: activeLayer.height }
+					if (!selection.current.invert) {
+						if (selection.current.mode === "rect" && selection.current.rect) {
+							rect = { x: selection.current.rect.x, y: selection.current.rect.y, w: selection.current.rect.w, h: selection.current.rect.h }
+						} else if (selection.current.mode === "lasso" && selection.current.path.length > 1) {
+							const pts = selection.current.path
+							let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
+							for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
+							rect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+						}
+					}
 					const hs = 10
 					const corners: ({ name: "nw" | "ne" | "se" | "sw"; x: number; y: number })[] = [
 						{ name: "nw", x: rect.x, y: rect.y },
@@ -283,6 +560,7 @@ export function useCanvas(
 					selection.current.path = [pos]
 					selection.current.start = null
 					selection.current.rect = null
+					selection.current.invert = false
 					selection.current.active = true
 					setIsDrawing(true)
 					composite()
@@ -487,58 +765,58 @@ export function useCanvas(
 	}, [onPointerDown, onPointerMove, onPointerUp])
 
 			const undoLastStroke = useCallback(() => {
-			if (!activeLayer) return
-			const id = activeLayer.id
-			const stack = undoStacksRef.current.get(id) ?? []
-			if (stack.length > 0) {
-				const entry = stack.pop()!
-				undoStacksRef.current.set(id, stack)
-						// Capture current state for redo
-						try {
-							if (entry.kind === "image") {
-								const current = activeLayer.ctx.getImageData(0, 0, activeLayer.width, activeLayer.height)
-								const rstack = redoStacksRef.current.get(id) ?? []
-								rstack.push({ kind: "image", data: current })
-								const MAX_STEPS = 30
-								while (rstack.length > MAX_STEPS) rstack.shift()
-								redoStacksRef.current.set(id, rstack)
-							} else {
-								const img = activeLayer.ctx.getImageData(0, 0, activeLayer.width, activeLayer.height)
-								const rstack = redoStacksRef.current.get(id) ?? []
-								rstack.push({ kind: "layer", width: activeLayer.width, height: activeLayer.height, x: activeLayer.x || 0, y: activeLayer.y || 0, image: img })
-								const MAX_STEPS = 30
-								while (rstack.length > MAX_STEPS) rstack.shift()
-								redoStacksRef.current.set(id, rstack)
-							}
-						} catch {}
-				if (entry.kind === "image") {
-					// Pixel-only undo
-					activeLayer.ctx.putImageData(entry.data, 0, 0)
+				if (!activeLayer) return
+				const id = activeLayer.id
+				const stack = undoStacksRef.current.get(id) ?? []
+				if (stack.length > 0) {
+					const entry = stack.pop()!
+					undoStacksRef.current.set(id, stack)
+					// Capture current state for redo
+					try {
+						if (entry.kind === "image") {
+							const current = activeLayer.ctx.getImageData(0, 0, activeLayer.width, activeLayer.height)
+							const rstack = redoStacksRef.current.get(id) ?? []
+							rstack.push({ kind: "image", data: current })
+							const MAX_STEPS = 30
+							while (rstack.length > MAX_STEPS) rstack.shift()
+							redoStacksRef.current.set(id, rstack)
+						} else {
+							const img = activeLayer.ctx.getImageData(0, 0, activeLayer.width, activeLayer.height)
+							const rstack = redoStacksRef.current.get(id) ?? []
+							rstack.push({ kind: "layer", width: activeLayer.width, height: activeLayer.height, x: activeLayer.x || 0, y: activeLayer.y || 0, image: img })
+							const MAX_STEPS = 30
+							while (rstack.length > MAX_STEPS) rstack.shift()
+							redoStacksRef.current.set(id, rstack)
+						}
+					} catch {}
+					if (entry.kind === "image") {
+						// Pixel-only undo
+						activeLayer.ctx.putImageData(entry.data, 0, 0)
+						composite()
+						return
+					}
+					// Full layer restore (size + pixels + position)
+					const restored = document.createElement("canvas")
+					restored.width = entry.width
+					restored.height = entry.height
+					const rctx = restored.getContext("2d")
+					if (!rctx) return
+					rctx.putImageData(entry.image, 0, 0)
+					activeLayer.canvas = restored
+					activeLayer.ctx = rctx
+					activeLayer.width = entry.width
+					activeLayer.height = entry.height
+					activeLayer.x = entry.x
+					activeLayer.y = entry.y
 					composite()
 					return
 				}
-				// Full layer restore (size + pixels + position)
-				const restored = document.createElement("canvas")
-				restored.width = entry.width
-				restored.height = entry.height
-				const rctx = restored.getContext("2d")
-				if (!rctx) return
-				rctx.putImageData(entry.image, 0, 0)
-				activeLayer.canvas = restored
-				activeLayer.ctx = rctx
-				activeLayer.width = entry.width
-				activeLayer.height = entry.height
-				activeLayer.x = entry.x
-				activeLayer.y = entry.y
-				composite()
-				return
-			}
-			// Fallback to single-step snapshot if stack empty
-			if (preStrokeImage.current) {
-				activeLayer.ctx.putImageData(preStrokeImage.current, 0, 0)
-				composite()
-				preStrokeImage.current = null
-			}
+				// Fallback to single-step snapshot if stack empty
+				if (preStrokeImage.current) {
+					activeLayer.ctx.putImageData(preStrokeImage.current, 0, 0)
+					composite()
+					preStrokeImage.current = null
+				}
 			}, [activeLayer, composite])
 
 			const redoLastAction = useCallback(() => {
@@ -587,7 +865,13 @@ export function useCanvas(
 			}, [activeLayer, composite])
 
 			const clearSelection = useCallback(() => {
-				selection.current = { mode: "none", start: null, rect: null, path: [], active: false }
+				selection.current = { mode: "none", start: null, rect: null, path: [], invert: false, active: false }
+				composite()
+			}, [composite])
+
+			const invertSelection = useCallback(() => {
+				if (selection.current.mode === "none") return
+				selection.current.invert = !selection.current.invert
 				composite()
 			}, [composite])
 
@@ -780,7 +1064,7 @@ export function useCanvas(
 					activeLayer.height = sh
 					activeLayer.x = Math.floor(rect.x)
 					activeLayer.y = Math.floor(rect.y)
-					selection.current = { mode: "none", start: null, rect: null, path: [], active: false }
+					selection.current = { mode: "none", start: null, rect: null, path: [], invert: false, active: false }
 					addHistory("Crop to selection")
 					composite()
 					return
@@ -815,7 +1099,7 @@ export function useCanvas(
 					activeLayer.height = sh
 					activeLayer.x = Math.floor(minX)
 					activeLayer.y = Math.floor(minY)
-					selection.current = { mode: "none", start: null, rect: null, path: [], active: false }
+					selection.current = { mode: "none", start: null, rect: null, path: [], invert: false, active: false }
 					addHistory("Crop to lasso")
 					composite()
 				}
@@ -829,24 +1113,38 @@ export function useCanvas(
 				const layer = activeLayer
 				let sx = 0, sy = 0, sw = layer.width, sh = layer.height
 				let poly: { x: number; y: number }[] | null = null
+				const inverted = selection.current.invert
 				if (selection.current.mode === "rect" && selection.current.rect) {
 					const rect = selection.current.rect
-					sx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(rect.w)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(rect.h)))
-					if (sw <= 0 || sh <= 0) return
+					const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+					const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+					const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+					const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+					if (rw <= 0 || rh <= 0) return
+					if (!inverted) {
+						sx = rx; sy = ry; sw = rw; sh = rh
+					} else {
+						sx = 0; sy = 0; sw = layer.width; sh = layer.height
+						// Use rect bounds in local coords for masking
+						poly = null
+						// We'll check insideRect per-pixel
+					}
 				} else if (selection.current.mode === "lasso" && selection.current.path.length > 2) {
 					const pts = selection.current.path
 					let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
 					for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
-					sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
-					if (sw <= 0 || sh <= 0) return
-					// polygon points relative to bbox
-					poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					if (!inverted) {
+						sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
+						sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
+						sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
+						sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
+						if (sw <= 0 || sh <= 0) return
+						poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					} else {
+						sx = 0; sy = 0; sw = layer.width; sh = layer.height
+						const ox = layer.x || 0, oy = layer.y || 0
+						poly = pts.map((p) => ({ x: p.x - ox, y: p.y - oy }))
+					}
 				}
 				try {
 					const img = layer.ctx.getImageData(sx, sy, sw, sh)
@@ -860,7 +1158,17 @@ export function useCanvas(
 					for (let y = 0; y < sh; y++) {
 						for (let x = 0; x < sw; x++) {
 							const idx = (y * sw + x) * 4
-							const inside = !poly || pointInPolygon(poly, x + 0.5, y + 0.5)
+							let inside = true
+							if (selection.current.mode === "rect" && selection.current.rect && selection.current.invert) {
+								const rect = selection.current.rect
+								const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+								const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+								const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+								const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+								inside = !(x >= rx && x < rx + rw && y >= ry && y < ry + rh)
+							} else if (poly) {
+								inside = selection.current.invert ? !pointInPolygon(poly, x + 0.5, y + 0.5) : pointInPolygon(poly, x + 0.5, y + 0.5)
+							}
 							if (!inside) {
 								data[idx] = orig[idx]
 								data[idx + 1] = orig[idx + 1]
@@ -889,23 +1197,31 @@ export function useCanvas(
 				const layer = activeLayer
 				let sx = 0, sy = 0, sw = layer.width, sh = layer.height
 				let poly: { x: number; y: number }[] | null = null
+				const inverted = selection.current.invert
 				if (selection.current.mode === "rect" && selection.current.rect) {
 					const rect = selection.current.rect
-					sx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(rect.w)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(rect.h)))
-					if (sw <= 0 || sh <= 0) return
+					const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+					const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+					const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+					const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+					if (rw <= 0 || rh <= 0) return
+					if (!inverted) { sx = rx; sy = ry; sw = rw; sh = rh }
 				} else if (selection.current.mode === "lasso" && selection.current.path.length > 2) {
 					const pts = selection.current.path
 					let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
 					for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
-					sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
-					if (sw <= 0 || sh <= 0) return
-					poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					if (!inverted) {
+						sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
+						sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
+						sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
+						sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
+						if (sw <= 0 || sh <= 0) return
+						poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					} else {
+						sx = 0; sy = 0; sw = layer.width; sh = layer.height
+						const ox = layer.x || 0, oy = layer.y || 0
+						poly = pts.map((p) => ({ x: p.x - ox, y: p.y - oy }))
+					}
 				}
 				try {
 					const img = layer.ctx.getImageData(sx, sy, sw, sh)
@@ -914,7 +1230,17 @@ export function useCanvas(
 					for (let y = 0; y < sh; y++) {
 						for (let x = 0; x < sw; x++) {
 							const idx = (y * sw + x) * 4
-							const inside = !poly || pointInPolygon(poly, x + 0.5, y + 0.5)
+							let inside = true
+							if (selection.current.mode === "rect" && selection.current.rect && selection.current.invert) {
+								const rect = selection.current.rect
+								const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+								const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+								const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+								const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+								inside = !(x >= rx && x < rx + rw && y >= ry && y < ry + rh)
+							} else if (poly) {
+								inside = selection.current.invert ? !pointInPolygon(poly, x + 0.5, y + 0.5) : pointInPolygon(poly, x + 0.5, y + 0.5)
+							}
 							if (!inside) {
 								data[idx] = orig[idx]
 								data[idx + 1] = orig[idx + 1]
@@ -941,23 +1267,31 @@ export function useCanvas(
 				const layer = activeLayer
 				let sx = 0, sy = 0, sw = layer.width, sh = layer.height
 				let poly: { x: number; y: number }[] | null = null
+				const inverted = selection.current.invert
 				if (selection.current.mode === "rect" && selection.current.rect) {
 					const rect = selection.current.rect
-					sx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(rect.w)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(rect.h)))
-					if (sw <= 0 || sh <= 0) return
+					const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+					const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+					const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+					const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+					if (rw <= 0 || rh <= 0) return
+					if (!inverted) { sx = rx; sy = ry; sw = rw; sh = rh }
 				} else if (selection.current.mode === "lasso" && selection.current.path.length > 2) {
 					const pts = selection.current.path
 					let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
 					for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
-					sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
-					if (sw <= 0 || sh <= 0) return
-					poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					if (!inverted) {
+						sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
+						sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
+						sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
+						sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
+						if (sw <= 0 || sh <= 0) return
+						poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					} else {
+						sx = 0; sy = 0; sw = layer.width; sh = layer.height
+						const ox = layer.x || 0, oy = layer.y || 0
+						poly = pts.map((p) => ({ x: p.x - ox, y: p.y - oy }))
+					}
 				}
 				try {
 					const img = layer.ctx.getImageData(sx, sy, sw, sh)
@@ -967,7 +1301,17 @@ export function useCanvas(
 					for (let y = 0; y < sh; y++) {
 						for (let x = 0; x < sw; x++) {
 							const idx = (y * sw + x) * 4
-							const inside = !poly || pointInPolygon(poly, x + 0.5, y + 0.5)
+							let inside = true
+							if (selection.current.mode === "rect" && selection.current.rect && selection.current.invert) {
+								const rect = selection.current.rect
+								const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+								const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+								const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+								const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+								inside = !(x >= rx && x < rx + rw && y >= ry && y < ry + rh)
+							} else if (poly) {
+								inside = selection.current.invert ? !pointInPolygon(poly, x + 0.5, y + 0.5) : pointInPolygon(poly, x + 0.5, y + 0.5)
+							}
 							if (!inside) {
 								data[idx] = orig[idx]
 								data[idx + 1] = orig[idx + 1]
@@ -1061,23 +1405,31 @@ export function useCanvas(
 				const layer = activeLayer
 				let sx = 0, sy = 0, sw = layer.width, sh = layer.height
 				let poly: { x: number; y: number }[] | null = null
+				const inverted = selection.current.invert
 				if (selection.current.mode === "rect" && selection.current.rect) {
 					const rect = selection.current.rect
-					sx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(rect.w)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(rect.h)))
-					if (sw <= 0 || sh <= 0) return
+					const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+					const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+					const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+					const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+					if (rw <= 0 || rh <= 0) return
+					if (!inverted) { sx = rx; sy = ry; sw = rw; sh = rh }
 				} else if (selection.current.mode === "lasso" && selection.current.path.length > 2) {
 					const pts = selection.current.path
 					let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
 					for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
-					sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
-					if (sw <= 0 || sh <= 0) return
-					poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					if (!inverted) {
+						sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
+						sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
+						sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
+						sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
+						if (sw <= 0 || sh <= 0) return
+						poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					} else {
+						sx = 0; sy = 0; sw = layer.width; sh = layer.height
+						const ox = layer.x || 0, oy = layer.y || 0
+						poly = pts.map((p) => ({ x: p.x - ox, y: p.y - oy }))
+					}
 				}
 				try {
 					const img = layer.ctx.getImageData(sx, sy, sw, sh)
@@ -1087,7 +1439,17 @@ export function useCanvas(
 					for (let y = 0; y < sh; y++) {
 						for (let x = 0; x < sw; x++) {
 							const idx = (y * sw + x) * 4
-							const inside = !poly || pointInPolygon(poly, x + 0.5, y + 0.5)
+							let inside = true
+							if (selection.current.mode === "rect" && selection.current.rect && selection.current.invert) {
+								const rect = selection.current.rect
+								const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+								const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+								const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+								const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+								inside = !(x >= rx && x < rx + rw && y >= ry && y < ry + rh)
+							} else if (poly) {
+								inside = selection.current.invert ? !pointInPolygon(poly, x + 0.5, y + 0.5) : pointInPolygon(poly, x + 0.5, y + 0.5)
+							}
 							if (!inside) {
 								data[idx] = orig[idx]
 								data[idx + 1] = orig[idx + 1]
@@ -1115,23 +1477,31 @@ export function useCanvas(
 				const layer = activeLayer
 				let sx = 0, sy = 0, sw = layer.width, sh = layer.height
 				let poly: { x: number; y: number }[] | null = null
+				const inverted = selection.current.invert
 				if (selection.current.mode === "rect" && selection.current.rect) {
 					const rect = selection.current.rect
-					sx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(rect.w)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(rect.h)))
-					if (sw <= 0 || sh <= 0) return
+					const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+					const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+					const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+					const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+					if (rw <= 0 || rh <= 0) return
+					if (!inverted) { sx = rx; sy = ry; sw = rw; sh = rh }
 				} else if (selection.current.mode === "lasso" && selection.current.path.length > 2) {
 					const pts = selection.current.path
 					let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
 					for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
-					sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
-					if (sw <= 0 || sh <= 0) return
-					poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					if (!inverted) {
+						sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
+						sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
+						sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
+						sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
+						if (sw <= 0 || sh <= 0) return
+						poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					} else {
+						sx = 0; sy = 0; sw = layer.width; sh = layer.height
+						const ox = layer.x || 0, oy = layer.y || 0
+						poly = pts.map((p) => ({ x: p.x - ox, y: p.y - oy }))
+					}
 				}
 				try {
 					const img = layer.ctx.getImageData(sx, sy, sw, sh)
@@ -1140,7 +1510,17 @@ export function useCanvas(
 					for (let y = 0; y < sh; y++) {
 						for (let x = 0; x < sw; x++) {
 							const idx = (y * sw + x) * 4
-							const inside = !poly || pointInPolygon(poly, x + 0.5, y + 0.5)
+							let inside = true
+							if (selection.current.mode === "rect" && selection.current.rect && selection.current.invert) {
+								const rect = selection.current.rect
+								const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+								const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+								const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+								const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+								inside = !(x >= rx && x < rx + rw && y >= ry && y < ry + rh)
+							} else if (poly) {
+								inside = selection.current.invert ? !pointInPolygon(poly, x + 0.5, y + 0.5) : pointInPolygon(poly, x + 0.5, y + 0.5)
+							}
 							if (!inside) {
 								data[idx] = orig[idx]
 								data[idx + 1] = orig[idx + 1]
@@ -1165,23 +1545,31 @@ export function useCanvas(
 				const layer = activeLayer
 				let sx = 0, sy = 0, sw = layer.width, sh = layer.height
 				let poly: { x: number; y: number }[] | null = null
+				const inverted = selection.current.invert
 				if (selection.current.mode === "rect" && selection.current.rect) {
 					const rect = selection.current.rect
-					sx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(rect.w)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(rect.h)))
-					if (sw <= 0 || sh <= 0) return
+					const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+					const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+					const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+					const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+					if (rw <= 0 || rh <= 0) return
+					if (!inverted) { sx = rx; sy = ry; sw = rw; sh = rh }
 				} else if (selection.current.mode === "lasso" && selection.current.path.length > 2) {
 					const pts = selection.current.path
 					let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y
 					for (const p of pts) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y }
-					sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
-					sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
-					sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
-					sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
-					if (sw <= 0 || sh <= 0) return
-					poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					if (!inverted) {
+						sx = Math.max(0, Math.floor(minX - (layer.x || 0)))
+						sy = Math.max(0, Math.floor(minY - (layer.y || 0)))
+						sw = Math.max(0, Math.min(layer.width - sx, Math.floor(maxX - minX)))
+						sh = Math.max(0, Math.min(layer.height - sy, Math.floor(maxY - minY)))
+						if (sw <= 0 || sh <= 0) return
+						poly = pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+					} else {
+						sx = 0; sy = 0; sw = layer.width; sh = layer.height
+						const ox = layer.x || 0, oy = layer.y || 0
+						poly = pts.map((p) => ({ x: p.x - ox, y: p.y - oy }))
+					}
 				}
 				try {
 					const img = layer.ctx.getImageData(sx, sy, sw, sh)
@@ -1195,7 +1583,17 @@ export function useCanvas(
 					const bias = 128
 					for (let yy = 1; yy < h - 1; yy++) {
 						for (let xx = 1; xx < w - 1; xx++) {
-							const inside = !poly || pointInPolygon(poly, xx + 0.5, yy + 0.5)
+							let inside = true
+							if (selection.current.mode === "rect" && selection.current.rect && selection.current.invert) {
+								const rect = selection.current.rect
+								const rx = Math.max(0, Math.floor(rect.x - (layer.x || 0)))
+								const ry = Math.max(0, Math.floor(rect.y - (layer.y || 0)))
+								const rw = Math.max(0, Math.min(layer.width - rx, Math.floor(rect.w)))
+								const rh = Math.max(0, Math.min(layer.height - ry, Math.floor(rect.h)))
+								inside = !(xx >= rx && xx < rx + rw && yy >= ry && yy < ry + rh)
+							} else if (poly) {
+								inside = selection.current.invert ? !pointInPolygon(poly, xx + 0.5, yy + 0.5) : pointInPolygon(poly, xx + 0.5, yy + 0.5)
+							}
 							let rr = 0, gg = 0, bb = 0
 							if (inside) {
 								let ki = 0
@@ -1261,6 +1659,8 @@ export function useCanvas(
 	return {
 		displayCanvasRef,
 		size,
+		// Canvas size override if set (null means auto)
+		canvasSizeOverride: docSize,
 		brush,
 		setBrush,
 		composite,
@@ -1272,6 +1672,8 @@ export function useCanvas(
 			getSelectionRect,
 			rotateActiveLayer90,
 			resizeActiveLayer,
+			resizeCanvas,
+			fitCanvasToLayers,
 			cropActiveLayerToSelection,
 			previewTick,
 			applyBrightnessContrast,
@@ -1281,6 +1683,7 @@ export function useCanvas(
 			applyEmboss,
 			flipActiveLayer,
 	    historyEntries,
+			invertSelection,
 			applySepia,
 			applyPixelate,
 	}

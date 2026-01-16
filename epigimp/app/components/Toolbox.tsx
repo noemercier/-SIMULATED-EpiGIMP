@@ -14,6 +14,7 @@ type Props = {
   onRotateCCW: () => void
   onRotate180: () => void
   onResize: () => void
+  onResizeCanvas: () => void
   hasSelection?: boolean
   canTransform?: boolean
 }
@@ -28,7 +29,7 @@ const TOOL_TIPS: Record<Tool, string> = {
   eyedropper: "Eyedropper: pick a color from the canvas",
 }
 
-export default function Toolbox({ activeTool, onSelectTool, onCrop, onRotateCW, onRotateCCW, onRotate180, onResize, hasSelection = false, canTransform = true }: Props) {
+export default function Toolbox({ activeTool, onSelectTool, onCrop, onRotateCW, onRotateCCW, onRotate180, onResize, onResizeCanvas, hasSelection = false, canTransform = true }: Props) {
   const toolBtn = (tool: Tool, icon: React.ReactNode) => (
     <Tooltip key={tool} text={TOOL_TIPS[tool]}>
       <button
@@ -75,6 +76,7 @@ export default function Toolbox({ activeTool, onSelectTool, onCrop, onRotateCW, 
       {actionBtn("rotate-cw", <RotateCw size={18} />, "Rotate active layer 90° CW", onRotateCW, !canTransform)}
       {actionBtn("rotate-180", <RotateCw size={18} />, "Rotate active layer 180°", onRotate180, !canTransform)}
       {actionBtn("resize", <Expand size={18} />, "Resize active layer (prompt)", onResize, !canTransform)}
+      {actionBtn("resize-canvas", <Expand size={18} />, "Resize canvas (prompt)", onResizeCanvas, false)}
     </div>
   )
 }

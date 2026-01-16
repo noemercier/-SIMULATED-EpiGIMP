@@ -120,6 +120,17 @@ export default function EditorRoot() {
               { label: "New from selection", onClick: onNewLayerFromSelection },
               { label: "Delete active", onClick: onDeleteActive, disabled: !layersApi.activeLayer || layersApi.layers.length <= 1 },
               { label: "Import image as layer…", onClick: importImageAsLayer },
+              { label: "Resize Active Layer…", onClick: () => {
+                const w = layersApi.activeLayer?.width ?? 0
+                const h = layersApi.activeLayer?.height ?? 0
+                const input = window.prompt(`Resize active layer (widthxheight)`, `${w}x${h}`)
+                if (!input) return
+                const m = input.trim().match(/^(\d+)x(\d+)$/i)
+                if (!m) { alert("Enter size like 800x600"); return }
+                const nw = Number(m[1])
+                const nh = Number(m[2])
+                canvasApi.resizeActiveLayer?.(nw, nh)
+              }, disabled: !layersApi.activeLayer },
             ]}
           />
           <LocalDropdown
@@ -129,6 +140,26 @@ export default function EditorRoot() {
             )}
           />
           <LocalDropdown label="Filters" items={filtersMenu} />
+          <LocalDropdown
+            label="Canvas"
+            items={[
+              { label: "Resize Canvas…", onClick: () => {
+                const w = canvasApi.size.width
+                const h = canvasApi.size.height
+                const input = window.prompt(`Resize canvas (widthxheight)`, `${w}x${h}`)
+                if (!input) return
+                const m = input.trim().match(/^(\d+)x(\d+)$/i)
+                if (!m) {
+                  alert("Enter size like 1024x768")
+                  return
+                }
+                const nw = Number(m[1])
+                const nh = Number(m[2])
+                canvasApi.resizeCanvas?.(nw, nh)
+              } },
+              { label: "Fit to Layers", onClick: () => canvasApi.fitCanvasToLayers?.() },
+            ]}
+          />
         </div>
         <div className="ml-auto flex items-center gap-2">
           <button type="button" className="app-icon-btn" onClick={onApplyFilters} title="Open Filters panel" aria-label="Open Filters panel">
@@ -420,6 +451,20 @@ export default function EditorRoot() {
             const nw = Number(m[1])
             const nh = Number(m[2])
             canvasApi.resizeActiveLayer?.(nw, nh)
+          }}
+          onResizeCanvas={() => {
+            const w = canvasApi.size.width
+            const h = canvasApi.size.height
+            const input = window.prompt(`Resize canvas (widthxheight)`, `${w}x${h}`)
+            if (!input) return
+            const m = input.trim().match(/^(\d+)x(\d+)$/i)
+            if (!m) {
+              alert("Enter size like 1024x768")
+              return
+            }
+            const nw = Number(m[1])
+            const nh = Number(m[2])
+            canvasApi.resizeCanvas?.(nw, nh)
           }}
           hasSelection={!!canvasApi.getSelectionRect?.()}
           canTransform={!!layersApi.activeLayer}

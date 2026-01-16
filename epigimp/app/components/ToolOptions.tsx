@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-import { Undo2, Crop, RotateCcw, RotateCw, Expand, Sparkles, XCircle } from "lucide-react"
+import { Undo2, Crop, RotateCcw, RotateCw, Expand, Sparkles, XCircle, FlipHorizontal } from "lucide-react"
 import type { useCanvas } from "../hooks/useCanvas"
 import type { Layer } from "../hooks/useLayers"
 
@@ -12,11 +12,18 @@ type Props = {
 }
 
 export default function ToolOptions({ canvas, activeLayer, activeTool }: Props) {
-  const { brush, setBrush, undoLastStroke, cropActiveLayerToSelection, rotateActiveLayer90, resizeActiveLayer, getSelectionRect, applyBrightnessContrast, applySepia, applyPixelate, clearSelection } = canvas
+  const { brush, setBrush, undoLastStroke, cropActiveLayerToSelection, rotateActiveLayer90, resizeActiveLayer, getSelectionRect, applyBrightnessContrast, applySepia, applyPixelate, clearSelection, invertSelection, resizeCanvas, fitCanvasToLayers, size, canvasSizeOverride } = canvas
   const [brightness, setBrightness] = React.useState(0)
   const [contrast, setContrast] = React.useState(0)
   const [sepiaAmt, setSepiaAmt] = React.useState(60)
   const [pixelSize, setPixelSize] = React.useState(8)
+  const [canvasW, setCanvasW] = React.useState<number>(size.width)
+  const [canvasH, setCanvasH] = React.useState<number>(size.height)
+
+  React.useEffect(() => {
+    setCanvasW(size.width)
+    setCanvasH(size.height)
+  }, [size.width, size.height])
 
   // Contextual visibility: show only when tool has options
   const showBrushOpts = activeTool === "brush" || activeTool === "eraser"
@@ -56,6 +63,16 @@ export default function ToolOptions({ canvas, activeLayer, activeTool }: Props) 
             <XCircle className="w-4 h-4" />
           </button>
           <span className="text-xs opacity-80">Deselect</span>
+          <button
+            className="app-icon-btn"
+            onClick={() => invertSelection()}
+            disabled={!getSelectionRect()}
+            title="Invert selection (select outside)"
+            aria-label="Invert selection"
+          >
+            <FlipHorizontal className="w-4 h-4" />
+          </button>
+          <span className="text-xs opacity-80">Invert</span>
         </div>
       )}
       <div className="flex flex-col gap-3">
@@ -169,6 +186,46 @@ export default function ToolOptions({ canvas, activeLayer, activeTool }: Props) 
               >
                 <Crop className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Canvas (document) size */}
+            <div className="mt-4 border-t pt-3">
+              <div className="font-semibold mb-2 text-sm">Canvas</div>
+              <div className="text-xs opacity-80 mb-2">Current: {size.width} × {size.height}{canvasSizeOverride ? " (custom)" : " (auto from layers)"}</div>
+              <div className="flex items-center gap-2">
+                <span className="w-24 text-sm">Resize Canvas (px)</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={canvasW}
+                  onChange={(e) => setCanvasW(Math.max(1, Number(e.target.value)))}
+                  className="w-20 px-2 py-1 border rounded"
+                />
+                <span>×</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={canvasH}
+                  onChange={(e) => setCanvasH(Math.max(1, Number(e.target.value)))}
+                  className="w-20 px-2 py-1 border rounded"
+                />
+                <button
+                  className="app-icon-btn"
+                  onClick={() => resizeCanvas(canvasW, canvasH)}
+                  title="Resize the document canvas bounds"
+                >
+                  <Expand className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="mt-2">
+                <button
+                  className="app-btn px-2 py-1 text-xs"
+                  onClick={fitCanvasToLayers}
+                  title="Set canvas size to fit the largest layer"
+                >
+                  Fit to Layers
+                </button>
+              </div>
             </div>
           </div>
         )}

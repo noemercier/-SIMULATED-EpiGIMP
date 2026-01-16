@@ -16,6 +16,10 @@ export type Layer = {
 	height: number
 	x: number
 	y: number
+  // Optional metadata for file-system-backed layers
+  fileHandle?: FileSystemFileHandle
+  sourceName?: string
+  sourceType?: string
 }
 
 export type LayersState = {
@@ -63,7 +67,8 @@ export function useLayers(initialWidth = 1024, initialHeight = 768) {
 		[size.width, size.height],
 	)
 
-	const addLayerFromImage = useCallback((img: HTMLImageElement, name = "Image") => {
+	const addLayerFromImage = useCallback(
+	  (img: HTMLImageElement, name = "Image", meta?: { fileHandle?: FileSystemFileHandle; sourceName?: string; sourceType?: string }) => {
 		const width = img.naturalWidth
 		const height = img.naturalHeight
 		const { canvas, ctx } = createCanvas(width, height)
@@ -78,15 +83,20 @@ export function useLayers(initialWidth = 1024, initialHeight = 768) {
 			canvas,
 			ctx,
 			width,
-				height,
+					height,
 				x: 0,
 				y: 0,
+	        fileHandle: meta?.fileHandle,
+	        sourceName: meta?.sourceName,
+	        sourceType: meta?.sourceType,
 		}
 		setState((prev) => ({ layers: [...prev.layers, layer], activeLayerId: id }))
 		return layer
-	}, [])
+		}, [],
+	)
 
-		const addLayerFromCanvas = useCallback((sourceCanvas: HTMLCanvasElement, name = "Canvas") => {
+		const addLayerFromCanvas = useCallback(
+      (sourceCanvas: HTMLCanvasElement, name = "Canvas", meta?: { fileHandle?: FileSystemFileHandle; sourceName?: string; sourceType?: string }) => {
 			const width = sourceCanvas.width
 			const height = sourceCanvas.height
 			const { canvas, ctx } = createCanvas(width, height)
@@ -104,10 +114,14 @@ export function useLayers(initialWidth = 1024, initialHeight = 768) {
 				height,
 				x: 0,
 				y: 0,
+          fileHandle: meta?.fileHandle,
+          sourceName: meta?.sourceName,
+          sourceType: meta?.sourceType,
 			}
 			setState((prev) => ({ layers: [...prev.layers, layer], activeLayerId: id }))
 			return layer
-		}, [])
+		}, [],
+    )
 
 	const removeLayer = useCallback((id: string) => {
 		setState((prev) => {

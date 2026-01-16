@@ -1,28 +1,123 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Base colors */
+  --background: #0b1020; /* deep navy */
+  --foreground: #e6e8ee; /* light text */
+  --surface: #121a2e; /* panel background */
+  --surface-alt: #0f1628;
+  --border: #2a3350;
+  --accent: #6ee7b7; /* mint */
+  --accent-2: #60a5fa; /* sky */
+  --accent-3: #f59e0b; /* amber */
+}
+
+/* Explicit theme overrides using data-theme */
+:root[data-theme="dark"] {
+  --background: #0b1020;
+  --foreground: #e6e8ee;
+  --surface: #121a2e;
+  --surface-alt: #0f1628;
+  --border: #2a3350;
+}
+:root[data-theme="light"] {
+  --background: #f7fafc;
+  --foreground: #0a0a0a;
+  --surface: #ffffff;
+  --surface-alt: #f3f4f6;
+  --border: #e5e7eb;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* OS preference fallback when no data-theme is set */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --background: #f7fafc;
+    --foreground: #0a0a0a;
+    --surface: #ffffff;
+    --surface-alt: #f3f4f6;
+    --border: #e5e7eb;
   }
 }
 
-body {
-  background: var(--background);
+/* App body gradient and base font */
+body.app-body {
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 600px at 10% 10%, #1b2450 20%, transparent 70%),
+    radial-gradient(1000px 500px at 90% 20%, #1a365d 15%, transparent 70%),
+    linear-gradient(180deg, var(--background), #0b1224 70%);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+body.app-body[data-theme="light"] {
+  background:
+    radial-gradient(1200px 600px at 10% 10%, #e6f0ff 20%, transparent 70%),
+    radial-gradient(1000px 500px at 90% 20%, #eaf3ff 15%, transparent 70%),
+    linear-gradient(180deg, var(--background), #ffffff 70%);
+}
+
+.app-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+}
+
+.app-topbar {
+  background: linear-gradient(90deg, var(--surface-alt), var(--surface));
+  border-bottom: 1px solid var(--border);
+}
+
+.app-btn {
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--foreground);
+  border-radius: 9999px; /* more round */
+}
+.app-btn:hover {
+  background: color-mix(in oklab, var(--surface-alt), var(--accent-2) 10%);
+}
+.app-btn-accent {
+  background: color-mix(in oklab, var(--accent), #ffffff 10%);
+  color: #0a0a0a;
+  border-color: transparent;
+}
+.app-chip {
+  background: color-mix(in oklab, var(--accent-2), #ffffff 15%);
+  color: #0a0a0a;
+  border-radius: 9999px;
+  padding: 2px 8px;
+}
+
+/* Icon-only round button */
+.app-icon-btn {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--foreground);
+  border-radius: 9999px;
+}
+.app-icon-btn:hover {
+  background: color-mix(in oklab, var(--surface-alt), var(--accent-2) 10%);
+}
+
+/* Active tool highlight */
+.app-icon-btn.active {
+  border-color: var(--accent-2);
+  background: color-mix(in oklab, var(--surface-alt), var(--accent-2) 20%);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent-2), #ffffff 10%), 0 6px 16px rgba(96, 165, 250, 0.35);
 }
 
 /* Checkerboard grid to visualize transparency */

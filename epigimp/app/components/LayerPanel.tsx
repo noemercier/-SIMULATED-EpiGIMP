@@ -1,7 +1,7 @@
 "use client"
 
 import type { Layer } from "../hooks/useLayers"
-import { Trash2, Eye, EyeOff, ArrowUp, ArrowDown } from "lucide-react"
+import { Trash2, Eye, EyeOff, ArrowUp, ArrowDown, Plus } from "lucide-react"
 
 type Props = {
 	layers: Layer[]
@@ -12,16 +12,17 @@ type Props = {
 	onRemove: (id: string) => void
 	onAdd?: () => void
 	previewTick?: number
+  classNameWrapper?: string
 }
 
-export default function LayerPanel({ layers, activeLayerId, onSelect, onToggle, onMove, onRemove, onAdd, previewTick }: Props) {
+export default function LayerPanel({ layers, activeLayerId, onSelect, onToggle, onMove, onRemove, onAdd, previewTick, classNameWrapper }: Props) {
 	return (
-		<div className="p-2 border rounded-md w-80">
+		<div className={`p-2 app-panel w-80 ${classNameWrapper ?? ""}`}>
 			<div className="flex items-center justify-between mb-2">
 				<div className="font-semibold">Layers</div>
 				{onAdd && (
-					<button className="px-2 py-1 border rounded text-xs" onClick={onAdd}>
-						New Layer
+					<button className="app-icon-btn" aria-label="New Layer" title="New Layer" onClick={onAdd}>
+						<Plus className="w-4 h-4" />
 					</button>
 				)}
 			</div>
@@ -32,9 +33,9 @@ export default function LayerPanel({ layers, activeLayerId, onSelect, onToggle, 
 						.map(({ l }) => (
 						<li
 							key={l.id}
-							className={`flex items-center justify-between gap-2 p-2 rounded border ${
-								activeLayerId === l.id ? "bg-zinc-100 dark:bg-zinc-800" : "bg-transparent"
-							} hover:bg-zinc-50 dark:hover:bg-zinc-900`}
+							className={`flex items-center justify-between gap-2 p-2 rounded border-[var(--border)] ${
+								activeLayerId === l.id ? "bg-zinc-700/10" : "bg-transparent"
+							} hover:bg-zinc-700/20`}
 						>
 							<button className="flex-1 text-left flex items-center gap-2" onClick={() => onSelect(l.id)}>
 								{/* Thumbnail preview */}
@@ -52,13 +53,13 @@ export default function LayerPanel({ layers, activeLayerId, onSelect, onToggle, 
 								</span>
 							</button>
 							<div className="flex gap-1">
-								<button title="Toggle" onClick={() => onToggle(l.id)} className="px-2 py-1 border rounded">
+								<button title="Toggle" onClick={() => onToggle(l.id)} className="app-icon-btn">
 									{l.visible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
 								</button>
-								<button title="Move up" onClick={() => onMove(l.id, "up")} className="px-2 py-1 border rounded">
+								<button title="Move up" onClick={() => onMove(l.id, "up")} className="app-icon-btn">
 									<ArrowUp className="w-4 h-4" />
 								</button>
-								<button title="Move down" onClick={() => onMove(l.id, "down")} className="px-2 py-1 border rounded">
+								<button title="Move down" onClick={() => onMove(l.id, "down")} className="app-icon-btn">
 									<ArrowDown className="w-4 h-4" />
 								</button>
 								<button
@@ -68,7 +69,7 @@ export default function LayerPanel({ layers, activeLayerId, onSelect, onToggle, 
 										const ok = window.confirm(`Delete layer "${l.name}"?`)
 										if (ok) onRemove(l.id)
 									}}
-									className="px-2 py-1 border rounded"
+									className="app-icon-btn"
 									disabled={layers.length <= 1}
 								>
 									<Trash2 className="w-4 h-4" />

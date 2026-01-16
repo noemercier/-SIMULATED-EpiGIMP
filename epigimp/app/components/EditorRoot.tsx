@@ -2,6 +2,7 @@
 
 import EditorCanvas from "./EditorCanvas"
 import LayerPanel from "./LayerPanel"
+import HistoryPanel from "./HistoryPanel"
 import FileLoader from "./FileLoader"
 import ToolOptions from "./ToolOptions"
 import Toolbox from "./Toolbox"
@@ -9,6 +10,8 @@ import StatusBar from "./StatusBar"
 import { useLayers } from "../hooks/useLayers"
 import { useCanvas } from "../hooks/useCanvas"
 import { useEffect, useState } from "react"
+import { canvasToBMPBlob, downloadBlob, canvasToBlob } from "../lib/imageUtils"
+import { Wand2, Sun, Moon } from "lucide-react"
 
 export default function EditorRoot() {
   type LocalMenuItem = {
@@ -25,12 +28,12 @@ export default function EditorRoot() {
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="px-2 py-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700"
+          className="px-2 py-1 rounded app-btn"
         >
           {label}
         </button>
         {open && (
-          <div className="absolute left-0 top-full mt-1 min-w-[180px] rounded border bg-white shadow dark:bg-zinc-900 z-50">
+          <div className="absolute left-0 top-full mt-1 min-w-[200px] rounded border app-panel z-50">
             {items.map((item) => (
               <button
                 key={item.label}
@@ -40,7 +43,7 @@ export default function EditorRoot() {
                   setOpen(false)
                 }}
                 className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm ${
-                  item.disabled ? "opacity-60 cursor-not-allowed" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  item.disabled ? "opacity-60 cursor-not-allowed" : "hover:bg-zinc-700/20"
                 }`}
                 disabled={item.disabled}
               >
@@ -62,21 +65,29 @@ export default function EditorRoot() {
     onUndo,
     onNewLayerFromSelection,
     onDeleteActive,
-    onPickTool,
-    activeTool,
+  onPickTool,
+  activeTool,
+    onApplyFilters,
+    filtersMenu,
+    onToggleTheme,
+    themeLabel,
   }: {
-    onNewLayer: () => void
-    onExport: () => void
-    onExportJpeg: () => void
-    onExportWebp: () => void
-    onUndo: () => void
-    onNewLayerFromSelection: () => void
-    onDeleteActive: () => void
-    onPickTool: (tool: "brush" | "eraser" | "move" | "select") => void
-    activeTool: "brush" | "eraser" | "move" | "select"
+    onNewLayer: () => void;
+    onExport: () => void;
+    onExportJpeg: () => void;
+    onExportWebp: () => void;
+    onUndo: () => void;
+    onNewLayerFromSelection: () => void;
+    onDeleteActive: () => void;
+  onPickTool: (tool: "brush" | "eraser" | "move" | "select" | "lasso" | "transform" | "eyedropper") => void;
+  activeTool: "brush" | "eraser" | "move" | "select" | "lasso" | "transform" | "eyedropper";
+    onApplyFilters: () => void;
+    filtersMenu: { label: string; onClick: () => void; disabled?: boolean }[];
+    onToggleTheme: () => void;
+    themeLabel: string;
   }) {
     return (
-      <div className="flex items-center gap-4 bg-zinc-200 dark:bg-zinc-800 px-3 py-2 text-sm">
+      <div className="flex items-center gap-4 app-topbar px-3 py-2 text-sm">
         <div className="flex items-center gap-3">
           <LocalDropdown
             label="File"
@@ -84,6 +95,10 @@ export default function EditorRoot() {
               { label: "Export PNG", onClick: onExport },
               { label: "Export JPEG", onClick: onExportJpeg },
               { label: "Export WebP", onClick: onExportWebp },
+              { label: "Export AVIF", onClick: exportAvif },
+              { label: "Export BMP", onClick: exportBmp },
+              { label: "Open (File System)", onClick: openViaFS },
+              { label: "Save Active", onClick: saveActiveToHandle, disabled: !layersApi.activeLayer || !layersApi.activeLayer.fileHandle },
             ]}
           />
           <LocalDropdown
@@ -97,26 +112,51 @@ export default function EditorRoot() {
           <LocalDropdown
             label="Layer"
             items={[
+              { label: "Open Layers panel", onClick: () => {
+                const el = document.querySelector(".layers-panel") as HTMLElement | null
+                el?.scrollIntoView({ behavior: "smooth" })
+              } },
               { label: "New", onClick: onNewLayer },
               { label: "New from selection", onClick: onNewLayerFromSelection },
               { label: "Delete active", onClick: onDeleteActive, disabled: !layersApi.activeLayer || layersApi.layers.length <= 1 },
+              { label: "Import image as layer…", onClick: importImageAsLayer },
             ]}
           />
           <LocalDropdown
             label="Tools"
-            items={("brush,eraser,move,select".split(",") as ("brush" | "eraser" | "move" | "select")[]).map(
+            items={("brush,eraser,move,select,lasso,transform,eyedropper".split(",") as ("brush" | "eraser" | "move" | "select" | "lasso" | "transform" | "eyedropper")[]).map(
               (t) => ({ label: t, onClick: () => onPickTool(t), active: activeTool === t })
             )}
           />
+          <LocalDropdown label="Filters" items={filtersMenu} />
         </div>
-        <div className="ml-auto" />
+        <div className="ml-auto flex items-center gap-2">
+          <button type="button" className="app-icon-btn" onClick={onApplyFilters} title="Open Filters panel" aria-label="Open Filters panel">
+            <Wand2 className="w-4 h-4" />
+          </button>
+          <button type="button" className="app-icon-btn" onClick={onToggleTheme} title={`Toggle theme (${themeLabel})`} aria-label={`Toggle theme (${themeLabel})`}>
+            {themeLabel === "Dark" ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
     )
   }
   const layersApi = useLayers()
-  const [activeTool, setActiveTool] = useState<"brush" | "move" | "eraser" | "select">("brush")
+  const [activeTool, setActiveTool] = useState<"brush" | "move" | "eraser" | "select" | "lasso" | "transform" | "eyedropper">("brush")
   const canvasApi = useCanvas(layersApi.layers, layersApi.activeLayer, activeTool)
   const [clipboard, setClipboard] = useState<HTMLCanvasElement | null>(null)
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    if (typeof window === "undefined") return "dark"
+    const t = window.localStorage.getItem("epigimp-theme") as "dark" | "light" | null
+    return t ?? "dark"
+  })
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.setAttribute("data-theme", theme)
+      window.localStorage.setItem("epigimp-theme", theme)
+    }
+  }, [theme])
 
   const exportPng = () => {
     const el = canvasApi.displayCanvasRef.current
@@ -142,6 +182,132 @@ export default function EditorRoot() {
     a.href = url
     a.download = `epigimp.${defaultExt}`
     a.click()
+  }
+
+  const exportAvif = () => {
+    const el = canvasApi.displayCanvasRef.current
+    if (!el) return
+    let quality = 0.9
+    const qStr = window.prompt("AVIF Quality (0.0 - 1.0)", "0.9")
+    if (qStr) {
+      const qNum = Number(qStr)
+      if (!Number.isNaN(qNum) && qNum >= 0 && qNum <= 1) quality = qNum
+    }
+    const url = el.toDataURL("image/avif", quality)
+    if (!url.startsWith("data:image/avif")) {
+      alert("AVIF export is not supported by your browser.")
+      return
+    }
+    const a = document.createElement("a")
+    a.href = url
+    a.download = "epigimp.avif"
+    a.click()
+  }
+
+  const exportBmp = () => {
+    const el = canvasApi.displayCanvasRef.current
+    if (!el) return
+    const blob = canvasToBMPBlob(el)
+    downloadBlob("epigimp.bmp", blob)
+  }
+
+  const importImageAsLayer = async () => {
+    try {
+      // @ts-expect-error: File System Access API types may not be in TS lib
+      const [handle] = await window.showOpenFilePicker({
+        types: [
+          {
+            description: "Images",
+            accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".bmp"] },
+          },
+        ],
+        multiple: false,
+      })
+      const file = await handle.getFile()
+      const img = new Image()
+      img.onload = () => {
+        layersApi.addLayerFromImage(img, file.name, { fileHandle: handle, sourceName: file.name, sourceType: file.type })
+      }
+      img.onerror = () => alert("Failed to load image")
+      img.src = URL.createObjectURL(file)
+    } catch (e) {
+      console.warn(e)
+    }
+  }
+
+  const openViaFS = async () => {
+    try {
+      // @ts-expect-error: File System Access API types are not global in TS lib yet
+      const [handle] = await window.showOpenFilePicker({
+        types: [
+          {
+            description: "Images",
+            accept: {
+              "image/*": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".bmp"],
+            },
+          },
+        ],
+        multiple: false,
+      })
+      const file = await handle.getFile()
+      const img = new Image()
+      img.onload = () => {
+        layersApi.addLayerFromImage(img, file.name, {
+          fileHandle: handle,
+          sourceName: file.name,
+          sourceType: file.type,
+        })
+      }
+      img.onerror = () => alert("Failed to load image")
+      img.src = URL.createObjectURL(file)
+    } catch (e) {
+      // user canceled or unsupported
+      console.warn(e)
+    }
+  }
+
+  const saveActiveToHandle = async () => {
+    const layer = layersApi.activeLayer
+    if (!layer || !layer.fileHandle) return
+    type ExportMime = { mime: "image/png" | "image/jpeg" | "image/webp" | "image/avif"; qualityPrompt?: string; defaultQuality?: number }
+    const typeMap: Record<string, ExportMime> = {
+      "image/png": { mime: "image/png" },
+      "image/jpeg": { mime: "image/jpeg", qualityPrompt: "JPEG Quality (0.0-1.0)", defaultQuality: 0.92 },
+      "image/webp": { mime: "image/webp", qualityPrompt: "WebP Quality (0.0-1.0)", defaultQuality: 0.92 },
+      "image/avif": { mime: "image/avif", qualityPrompt: "AVIF Quality (0.0-1.0)", defaultQuality: 0.9 },
+    }
+    const target: ExportMime = typeMap[layer.sourceType || "image/png"] || { mime: "image/png" }
+    let quality = target.defaultQuality ?? undefined
+    if (target.qualityPrompt) {
+      const qStr = window.prompt(target.qualityPrompt, String(target.defaultQuality ?? ""))
+      if (qStr) {
+        const qNum = Number(qStr)
+        if (!Number.isNaN(qNum) && qNum >= 0 && qNum <= 1) quality = qNum
+      }
+    }
+    // Canvas to blob using desired type
+    try {
+      // If AVIF not supported, fallback to PNG
+      let blob: Blob
+      if (target.mime === "image/avif") {
+        const url = layer.canvas.toDataURL("image/avif", quality)
+        if (!url.startsWith("data:image/avif")) {
+          alert("AVIF save not supported; falling back to PNG.")
+          blob = await canvasToBlob(layer.canvas, "image/png")
+        } else {
+          blob = await canvasToBlob(layer.canvas, "image/avif", quality)
+        }
+      } else {
+        blob = await canvasToBlob(layer.canvas, target.mime, quality)
+      }
+      const writable = await layer.fileHandle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+      alert(`Saved to ${layer.sourceName ?? "file"}`)
+    } catch (e) {
+      console.error(e)
+      alert("Failed to save. Your browser may not support the File System Access API.")
+    }
   }
 
   const newLayerFromSelection = () => {
@@ -209,8 +375,30 @@ export default function EditorRoot() {
         }}
         onPickTool={(t) => setActiveTool(t)}
         activeTool={activeTool}
+        onApplyFilters={() => {
+          // Scroll to right dock tool options panel
+          const el = document.querySelector(".tool-options-panel") as HTMLElement | null
+          el?.scrollIntoView({ behavior: "smooth" })
+        }}
+        filtersMenu={[
+          { label: "Brightness/Contrast…", onClick: () => {
+            const bStr = window.prompt("Brightness (-100..100)", "0")
+            const cStr = window.prompt("Contrast (-100..100)", "0")
+            const b = Number(bStr ?? 0)
+            const c = Number(cStr ?? 0)
+            canvasApi.applyBrightnessContrast?.(b, c)
+          }, disabled: !layersApi.activeLayer },
+          { label: "Black & White", onClick: () => canvasApi.applyThresholdBW?.(128), disabled: !layersApi.activeLayer },
+          { label: "Grayscale", onClick: () => canvasApi.applyGrayscale?.(), disabled: !layersApi.activeLayer },
+          { label: "Invert Colors", onClick: () => canvasApi.applyInvert?.(), disabled: !layersApi.activeLayer },
+          { label: "Emboss (engraved)", onClick: () => canvasApi.applyEmboss?.(), disabled: !layersApi.activeLayer },
+          { label: "Flip Horizontal", onClick: () => canvasApi.flipActiveLayer?.("horizontal"), disabled: !layersApi.activeLayer },
+          { label: "Flip Vertical", onClick: () => canvasApi.flipActiveLayer?.("vertical"), disabled: !layersApi.activeLayer },
+        ]}
+        onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+        themeLabel={theme === "dark" ? "Dark" : "Light"}
       />
-      <div className="flex flex-1 overflow-hidden">
+  <div className="flex flex-1 overflow-hidden">
         {/* Left toolbox */}
         <Toolbox
           activeTool={activeTool}
@@ -237,14 +425,22 @@ export default function EditorRoot() {
           canTransform={!!layersApi.activeLayer}
         />
         {/* Center canvas area */}
-        <div className="flex-1 p-2 overflow-auto">
+        <div className="flex-1 p-4 overflow-auto">
           <EditorCanvas canvas={canvasApi} />
         </div>
-        {/* Right dock: tool options + layers */}
-        <div className="w-80 p-2 flex flex-col gap-2 border-l">
-          <ToolOptions canvas={canvasApi} activeLayer={layersApi.activeLayer} />
-          <FileLoader layersApi={layersApi} />
+        {/* Right dock: tool options + history + layers */}
+        <div className="w-96 p-4 flex flex-col gap-3 border-l border-[var(--border)]">
+          {(activeTool === "brush" || activeTool === "eraser" || activeTool === "select" || activeTool === "lasso" || activeTool === "transform") && (
+            <div className="app-panel p-3 tool-options-panel">
+              <ToolOptions canvas={canvasApi} activeLayer={layersApi.activeLayer} activeTool={activeTool} />
+            </div>
+          )}
+          <HistoryPanel history={canvasApi.historyEntries} onUndo={canvasApi.undoLastStroke} onRedo={canvasApi.redoLastAction} />
+          <div className="app-panel p-3">
+            <FileLoader layersApi={layersApi} />
+          </div>
           <LayerPanel
+            classNameWrapper="layers-panel"
             layers={layersApi.layers}
             activeLayerId={layersApi.activeLayer?.id ?? null}
             onSelect={(id) => layersApi.setActiveLayer(id)}

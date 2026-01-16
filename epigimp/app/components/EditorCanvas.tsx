@@ -42,24 +42,32 @@ export default function EditorCanvas({ canvas }: Props) {
     })
   }, [size.width, size.height, scale])
 
-  // Wheel zoom (Ctrl + wheel) around cursor
+  // Wheel gestures: pinch-to-zoom (ctrlKey true) and two-finger pan (default wheel)
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey) return
       e.preventDefault()
-      const rect = el.getBoundingClientRect()
-      const cx = e.clientX - rect.left
-      const cy = e.clientY - rect.top
-      const factor = e.deltaY < 0 ? 1.1 : 0.9
-      const newScale = Math.max(0.25, Math.min(4, scale * factor))
-      // Adjust offset so the world point under the cursor stays fixed
-      const r = newScale / scale
-      const nx = r * offset.x + (1 - r) * cx
-      const ny = r * offset.y + (1 - r) * cy
-      setScale(newScale)
-      setOffset({ x: nx, y: ny })
+      // If ctrlKey is held (or pinch gesture on some browsers), zoom around cursor
+      if (e.ctrlKey) {
+        const rect = el.getBoundingClientRect()
+        const cx = e.clientX - rect.left
+        const cy = e.clientY - rect.top
+        const factor = e.deltaY < 0 ? 1.1 : 0.9
+        const newScale = Math.max(0.25, Math.min(4, scale * factor))
+        // Adjust offset so the world point under the cursor stays fixed
+        const r = newScale / scale
+        const nx = r * offset.x + (1 - r) * cx
+        const ny = r * offset.y + (1 - r) * cy
+        setScale(newScale)
+        setOffset({ x: nx, y: ny })
+        return
+      }
+      // Otherwise, treat wheel as trackpad two-finger pan
+      const dx = e.deltaX
+      const dy = e.deltaY
+      // Move canvas opposite the scroll direction for intuitive panning
+      setOffset((o) => ({ x: o.x - dx, y: o.y - dy }))
     }
     el.addEventListener("wheel", onWheel, { passive: false })
     return () => el.removeEventListener("wheel", onWheel)
@@ -144,13 +152,13 @@ export default function EditorCanvas({ canvas }: Props) {
         />
         <canvas
           ref={displayCanvasRef}
-          className="border shadow-sm"
+          className="shadow-sm"
           style={{ pointerEvents: spaceHeld ? "none" : "auto", position: "absolute", top: 0, left: 0 }}
         />
       </div>
       {/* Overlay to hint shortcuts */}
       <div className="pointer-events-none absolute left-2 bottom-2 text-xs text-zinc-200">
-        Ctrl+Wheel: Zoom · Space+Drag: Pan
+        Trackpad: Pinch to Zoom · Two-finger Scroll to Pan · Mouse: Ctrl+Wheel Zoom · Space+Drag Pan · Transform: Drag corners to resize, edges for horizontal/vertical only · Shift locks aspect
       </div>
     </div>
   )
